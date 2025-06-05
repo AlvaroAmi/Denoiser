@@ -11,7 +11,7 @@ def create_gaussian_window(patch_size=256):
     return window_2d
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels: int):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, in_channels, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(in_channels)
@@ -19,7 +19,7 @@ class ResidualBlock(nn.Module):
         self.bn2 = nn.BatchNorm2d(in_channels)
         self.relu = nn.LeakyReLU(0.2, inplace=True)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
         out = self.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
@@ -28,13 +28,13 @@ class ResidualBlock(nn.Module):
         return out
 
 class SpatialAttention(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels: int):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, in_channels // 8, 1)
         self.conv2 = nn.Conv2d(in_channels // 8, 1, 1)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         att = self.conv1(x)
         att = self.conv2(att)
         att = self.sigmoid(att)
@@ -144,70 +144,49 @@ class EnhancedUNet(nn.Module):
         out = self.final(d1)
         return out
 
-class ResidualBlock(nn.Module):
-    def __init__(self, in_channels):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, in_channels, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(in_channels)
-        self.conv2 = nn.Conv2d(in_channels, in_channels, 3, padding=1)
-        self.bn2 = nn.BatchNorm2d(in_channels)
-        self.relu = nn.LeakyReLU(0.2, inplace=True)
 
-    def forward(self, x):
-        residual = x
-        out = self.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += residual
-        out = self.relu(out)
-        return out
+def create_patches(image_path: str,
+                   patch_size: int = 256,
+                   overlap: int = 26,
+                   output_dir: str | None = None,
+                   prefix: str = ""):
+    """Split ``image_path`` into overlapping patches.
 
-class SpatialAttention(nn.Module):
-    def __init__(self, in_channels):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, in_channels // 8, 1)
-        self.conv2 = nn.Conv2d(in_channels // 8, 1, 1)
-        self.sigmoid = nn.Sigmoid()
+    The function guarantees coverage of the entire image, even when its
+    dimensions are not multiples of ``patch_size``.
+    """
 
-    def forward(self, x):
-        att = self.conv1(x)
-        att = self.conv2(att)
-        att = self.sigmoid(att)
-        return x * att
-
-def create_gaussian_window(patch_size=256):
-    window = windows.gaussian(patch_size, patch_size/6)
-    window_2d = np.outer(window, window)
-    window_2d = window_2d / window_2d.max()
-    return window_2d
-
-def create_patches(image_path, patch_size=256, overlap=26, output_dir=None, prefix=''):
-    img = Image.open(image_path).convert('RGB')
+    img = Image.open(image_path).convert("RGB")
     width, height = img.size
-    
+
     stride = patch_size - overlap
-    n_patches_w = (width - overlap) // stride
-    n_patches_h = (height - overlap) // stride
-    
-    patches = []
-    patch_positions = []
-    
+    x_positions = list(range(0, max(width - patch_size, 0) + 1, stride))
+    y_positions = list(range(0, max(height - patch_size, 0) + 1, stride))
+
+    if x_positions[-1] != width - patch_size:
+        x_positions.append(width - patch_size)
+    if y_positions[-1] != height - patch_size:
+        y_positions.append(height - patch_size)
+
+    patches: list[Image.Image] = []
+    patch_positions: list[tuple[int, int]] = []
+
     window = create_gaussian_window(patch_size)
-    
-    for i in range(n_patches_h):
-        for j in range(n_patches_w):
-            left = j * stride
-            top = i * stride
-            right = left + patch_size
-            bottom = top + patch_size
-            
-            if right > width or bottom > height:
-                continue
-            
-            patch = img.crop((left, top, right, bottom))
+
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    for top in y_positions:
+        for left in x_positions:
+            patch = img.crop((left, top, left + patch_size, top + patch_size))
             patches.append(patch)
             patch_positions.append((left, top))
-    
-    return patches, patch_positions, (n_patches_h, n_patches_w), (width, height), window
+
+            if output_dir:
+                patch.save(os.path.join(output_dir, f"{prefix}{top}_{left}.png"))
+
+    grid_shape = (len(y_positions), len(x_positions))
+    return patches, patch_positions, grid_shape, (width, height), window
 
 def reconstruct_image(patches, patch_positions, original_size, window, patch_size=256):
     width, height = original_size
